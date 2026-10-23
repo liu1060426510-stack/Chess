@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>連線象棋</title>
+<style>
+:root{--bg:#faf6ee;--fg:#2b2118;--card:#fff;--muted:#7a6a58;--line:#e2d6c2;--accent:#b3261e;--btn:#2b2118;--btnfg:#faf6ee;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1713;--fg:#f1e8da;--card:#262019;--muted:#a8998a;--line:#3a3128;--accent:#ff6b5e;--btn:#f1e8da;--btnfg:#1b1713}}
+:root[data-theme="dark"]{--bg:#1b1713;--fg:#f1e8da;--card:#262019;--muted:#a8998a;--line:#3a3128;--accent:#ff6b5e;--btn:#f1e8da;--btnfg:#1b1713}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:"PingFang TC","Microsoft JhengHei","Noto Sans TC",system-ui,sans-serif}
+#app{max-width:480px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 12px;letter-spacing:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+button{font:inherit;border:0;border-radius:10px;padding:11px 16px;background:var(--btn);color:var(--btnfg);cursor:pointer}
+button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+button:disabled{opacity:.4;cursor:default}
+input{font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:110px;text-transform:uppercase;letter-spacing:3px;text-align:center}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.muted{color:var(--muted);font-size:13px;line-height:1.6}
+#status{font-size:17px;font-weight:600;min-height:26px}
+#status.warn{color:var(--accent)}
+#code{font-family:ui-monospace,monospace;letter-spacing:3px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:2px 8px}
+svg{width:100%;height:auto;display:block;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+#toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--btn);color:var(--btnfg);padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>連線象棋</h1>
+
+  <div id="lobby">
+    <div class="card">
+      <b>線上對戰</b>
+      <div class="row"><button id="bCreate" disabled>建立房間（執紅先行）</button></div>
+      <div class="row"><input id="iCode" maxlength="5" placeholder="房號" autocomplete="off"><button id="bJoin" class="ghost" disabled>加入房間</button></div>
+      <p class="muted" id="net">正在連線…</p>
+    </div>
+    <div class="card">
+      <b>同機雙人</b>
+      <p class="muted">一台裝置輪流下，不需連線。</p>
+      <div class="row"><button id="bLocal" class="ghost">開始</button></div>
+    </div>
+  </div>
+
+  <div id="game" hidden>
+    <div class="card">
+      <div id="status"></div>
+      <div class="muted" id="sub"></div>
+    </div>
+    <div id="boardwrap"></div>
+    <div class="row">
+      <button id="bResign" class="ghost">認輸</button>
+      <button id="bRematch" hidden>再來一局</button>
+      <button id="bLeave" class="ghost">離開</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const START=["rnbakabnr",".........",".c.....c.","p.p.p.p.p",".........",".........","P.P.P.P.P",".C.....C.",".........","RNBAKABNR"].join("");
+const NAME={R:"俥",N:"傌",B:"相",A:"仕",K:"帥",C:"炮",P:"兵",r:"車",n:"馬",b:"象",a:"士",k:"將",c:"砲",p:"卒"};
+const isRed=ch=>ch<="Z";
+const inb=(r,c)=>r>=0&&r<10&&c>=0&&c<9;
+const D4=[[1,0],[-1,0],[0,1],[0,-1]];
+
+/* ---------- 規則 ---------- */
+function pseudo(b,r,c){
+  const p=b[r*9+c]; if(p===".")return [];
+  const red=isRed(p),t=p.toLowerCase(),out=[];
+  const add=(r2,c2)=>{if(!inb(r2,c2))return;const q=b[r2*9+c2];if(q==="."||isRed(q)!==red)out.push([r2,c2]);};
+  const pal=(r2,c2)=>c2>=3&&c2<=5&&(red?r2>=7:r2<=2);
+  if(t==="r"){
+    for(const[dr,dc]of D4){let y=r+dr,x=c+dc;while(inb(y,x)){const q=b[y*9+x];if(q==="."){out.push([y,x]);}else{if(isRed(q)!==red)out.push([y,x]);break;}y+=dr;x+=dc;}}
+  }else if(t==="c"){
+    for(const[dr,dc]of D4){let y=r+dr,x=c+dc;while(inb(y,x)&&b[y*9+x]==="."){out.push([y,x]);y+=dr;x+=dc;}
+      y+=dr;x+=dc;while(inb(y,x)){const q=b[y*9+x];if(q!=="."){if(isRed(q)!==red)out.push([y,x]);break;}y+=dr;x+=dc;}}
+  }else if(t==="n"){
+    for(const[dr,dc]of D4){const ly=r+dr,lx=c+dc;if(!inb(ly,lx)||b[ly*9+lx]!==".")continue;
+      if(dr!==0){add(r+2*dr,c-1);add(r+2*dr,c+1);}else{add(r-1,c+2*dc);add(r+1,c+2*dc);}}
+  }else if(t==="b"){
+    for(const dr of[-2,2])for(const dc of[-2,2]){const y=r+dr,x=c+dc;if(!inb(y,x))continue;
+      if(b[(r+dr/2)*9+(c+dc/2)]!==".")continue;if(red?y<5:y>4)continue;add(y,x);}
+  }else if(t==="a"){
+    for(const dr of[-1,1])for(const dc of[-1,1])if(pal(r+dr,c+dc))add(r+dr,c+dc);
+  }else if(t==="k"){
+    for(const[dr,dc]of D4)if(pal(r+dr,c+dc))add(r+dr,c+dc);
+  }else if(t==="p"){
+    const f=red?-1:1;add(r+f,c);if(red?r<=4:r>=5){add(r,c-1);add(r,c+1);}
+  }
+  return out;
+}
+function inCheck(b,red){
+  const ki=b.indexOf(red?"K":"k"),oi=b.indexOf(red?"k":"K");
+  if(ki<0)return true;
+  const kr=(ki/9)|0,kc=ki%9;
+  if(oi>=0&&oi%9===kc){const or=(oi/9)|0;let clear=true;
+    for(let r=Math.min(kr,or)+1;r<Math.max(kr,or);r++)if(b[r*9+kc]!=="."){clear=false;break;}
+    if(clear)return true;}
+  for(let i=0;i<90;i++){const q=b[i];if(q==="."||isRed(q)===red)continue;
+    for(const[y,x]of pseudo(b,(i/9)|0,i%9))if(y*9+x===ki)return true;}
+  return false;
+}
+function legal(b,r,c){
+  const red=isRed(b[r*9+c]);
+  return pseudo(b,r,c).filter(([y,x])=>{const nb=b.slice();nb[y*9+x]=nb[r*9+c];nb[r*9+c]=".";return!inCheck(nb,red);});
+}
+function hasMoves(b,red){
+  for(let i=0;i<90;i++){const q=b[i];if(q!=="."&&isRed(q)===red&&legal(b,(i/9)|0,i%9).length)return true;}
+  return false;
+}
+
+/* ---------- 狀態 ---------- */
+let db=null,uid=null,S=null,code=null,unsub=null,sel=null,moves=[];
+const mySide=()=>!S?null:S.local?"both":S.red===uid?"r":S.black===uid?"b":null;
+const canPlay=()=>{const m=mySide();return S&&!S.winner&&S.black&&(m==="both"||m===S.turn);};
+function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("on");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("on"),2200);}
+const sideName=s=>s==="r"?"紅方":"黑方";
+
+/* ---------- 繪製 ---------- */
+function boardSVG(){
+  const b=S.board.split(""),flip=mySide()==="b";
+  const P=(i)=>{let r=(i/9)|0,c=i%9;if(flip){r=9-r;c=8-c;}return[30+c*50,30+r*50];};
+  let g='<rect x="4" y="4" width="452" height="502" rx="10" fill="#e8c98f"/><g stroke="#5a3d1e" stroke-width="1.5" fill="none">';
+  for(let r=0;r<10;r++)g+=`<line x1="30" y1="${30+r*50}" x2="430" y2="${30+r*50}"/>`;
+  g+='<line x1="30" y1="30" x2="30" y2="480"/><line x1="430" y1="30" x2="430" y2="480"/>';
+  for(let c=1;c<8;c++){const x=30+c*50;g+=`<line x1="${x}" y1="30" x2="${x}" y2="230"/><line x1="${x}" y1="280" x2="${x}" y2="480"/>`;}
+  g+='<line x1="180" y1="30" x2="280" y2="130"/><line x1="280" y1="30" x2="180" y2="130"/><line x1="180" y1="380" x2="280" y2="480"/><line x1="280" y1="380" x2="180" y2="480"/></g>';
+  g+='<g font-size="24" fill="#5a3d1e" text-anchor="middle" font-family="serif"><text x="130" y="263">楚　河</text><text x="330" y="263">漢　界</text></g>';
+  if(S.last){for(const i of S.last){const[x,y]=P(i);g+=`<rect x="${x-24}" y="${y-24}" width="48" height="48" rx="6" fill="rgba(255,255,255,.35)" stroke="#b3261e" stroke-width="1.5" stroke-dasharray="4 3"/>`;}}
+  if(S.check&&!S.winner){const ki=b.indexOf(S.turn==="r"?"K":"k");if(ki>=0){const[x,y]=P(ki);g+=`<circle cx="${x}" cy="${y}" r="27" fill="none" stroke="#e53935" stroke-width="4"/>`;}}
+  for(let i=0;i<90;i++){const p=b[i];if(p===".")continue;const[x,y]=P(i),col=isRed(p)?"#c0392b":"#1c1c1c";
+    g+=`<g pointer-events="none"><circle cx="${x}" cy="${y}" r="22" fill="#f8e6b8" stroke="#5a3d1e" stroke-width="2"/><circle cx="${x}" cy="${y}" r="17.5" fill="none" stroke="${col}" stroke-width="1.5"/><text x="${x}" y="${y+8}" text-anchor="middle" font-size="23" font-weight="700" fill="${col}" font-family="'Noto Serif TC','PingFang TC','Microsoft JhengHei',serif">${NAME[p]}</text></g>`;}
+  if(sel!==null){const[x,y]=P(sel);g+=`<circle cx="${x}" cy="${y}" r="26" fill="none" stroke="#1e88e5" stroke-width="3.5" pointer-events="none"/>`;}
+  for(const i of moves){const[x,y]=P(i);g+=b[i]==="."?`<circle cx="${x}" cy="${y}" r="7" fill="#1e88e5" opacity=".75" pointer-events="none"/>`:`<circle cx="${x}" cy="${y}" r="26" fill="none" stroke="#e53935" stroke-width="3.5" pointer-events="none"/>`;}
+  for(let i=0;i<90;i++){const[x,y]=P(i);g+=`<circle cx="${x}" cy="${y}" r="24" fill="transparent" data-i="${i}"/>`;}
+  return`<svg viewBox="0 0 460 510" role="img" aria-label="象棋棋盤">${g}</svg>`;
+}
+function render(){
+  if(!S)return;
+  $("#boardwrap").innerHTML=boardSVG();
+  const m=mySide(),st=$("#status");let msg="",warn=false;
+  if(S.winner){msg=(m==="both"||m===null)?`${sideName(S.winner)}獲勝`:(m===S.winner?"你贏了！":"你輸了");}
+  else if(!S.black){msg="等待對手加入…";}
+  else if(m==="both"){msg=`輪到${sideName(S.turn)}`+(S.check?"（將軍！）":"");warn=S.check;}
+  else if(m===null){msg=`觀戰中：輪到${sideName(S.turn)}`;}
+  else if(m===S.turn){msg="輪到你"+(S.check?"（你被將軍！）":"");warn=S.check;}
+  else msg="等待對手落子…";
+  st.textContent=msg;st.classList.toggle("warn",warn);
+  $("#sub").innerHTML=S.local?"同機雙人模式":`房號 <span id="code">${code}</span>　你執${m==="r"?"紅":m==="b"?"黑":"（觀戰）"}`;
+  $("#bResign").hidden=!!S.winner||!S.black||m===null;
+  $("#bRematch").hidden=!S.winner||m===null;
+}
+
+/* ---------- 操作 ---------- */
+$("#boardwrap").addEventListener("click",e=>{
+  const t=e.target.closest("[data-i]");if(!t||!canPlay())return;
+  const i=+t.dataset.i,b=S.board,turnRed=S.turn==="r";
+  if(sel!==null&&moves.includes(i)){doMove(sel,i);return;}
+  const p=b[i];
+  if(p!=="."&&isRed(p)===turnRed){sel=i;moves=legal(b.split(""),(i/9)|0,i%9).map(([y,x])=>y*9+x);}
+  else{sel=null;moves=[];}
+  render();
+});
+async function push(patch){
+  S={...S,...patch};render();
+  if(!S.local&&db){try{await db.doc("games/"+code).update(patch);}catch(e){toast("同步失敗，請再試一次");}}
+}
+function doMove(f,t){
+  const b=S.board.split("");b[t]=b[f];b[f]=".";
+  const nextRed=S.turn==="b";
+  sel=null;moves=[];
+  push({board:b.join(""),turn:S.turn==="r"?"b":"r",last:[f,t],winner:hasMoves(b,nextRed)?null:S.turn,check:inCheck(b,nextRed),rev:S.rev+1});
+}
+$("#bResign").onclick=()=>{if(!S||S.winner)return;if(!confirm("確定要認輸嗎？"))return;const m=mySide();const loser=m==="both"?S.turn:m;sel=null;moves=[];push({winner:loser==="r"?"b":"r",rev:S.rev+1});};
+$("#bRematch").onclick=()=>{sel=null;moves=[];
+  const p={board:START,turn:"r",last:null,winner:null,check:false,rev:S.rev+1};
+  if(!S.local){p.red=S.black;p.black=S.red;}
+  push(p);};
+$("#bLeave").onclick=()=>{if(unsub){unsub();unsub=null;}S=null;code=null;sel=null;moves=[];$("#game").hidden=true;$("#lobby").hidden=false;};
+
+/* ---------- 房間 ---------- */
+function show(){$("#lobby").hidden=true;$("#game").hidden=false;render();}
+function sub(){
+  if(unsub)unsub();
+  unsub=db.doc("games/"+code).onSnapshot(snap=>{
+    const d=snap.data();if(!d)return;
+    if(S&&!S.local&&d.rev<S.rev)return;
+    if(!S||d.rev!==S.rev){sel=null;moves=[];}
+    S={...d};render();
+  },e=>toast("連線中斷："+(e&&e.code||"unknown")));
+}
+const genCode=()=>Array.from({length:5},()=>"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.random()*32|0]).join("");
+$("#bCreate").onclick=async()=>{
+  try{
+    let c,tries=0;do{c=genCode();tries++;}while((await db.doc("games/"+c).get()).exists&&tries<5);
+    code=c;S={board:START,turn:"r",last:null,winner:null,check:false,rev:0,red:uid,black:null};
+    await db.doc("games/"+code).set(S);sub();show();
+  }catch(e){S=null;toast("無法建立房間（可能沒有寫入權限）");}
+};
+async function join(c){
+  c=(c||"").trim().toUpperCase();if(!c)return;
+  try{
+    const snap=await db.doc("games/"+c).get();
+    if(!snap.exists){toast("找不到這個房間");return;}
+    const d=snap.data();code=c;
+    if(d.red!==uid&&d.black!==uid&&!d.black){await db.doc("games/"+c).update({black:uid});}
+    else if(d.red!==uid&&d.black!==uid){toast("房間已滿，以觀戰身分加入");}
+    sub();show();
+  }catch(e){toast("加入失敗（可能沒有寫入權限）");}
+}
+$("#bJoin").onclick=()=>join($("#iCode").value);
+$("#bLocal").onclick=()=>{code=null;S={local:true,board:START,turn:"r",last:null,winner:null,check:false,rev:0,red:"a",black:"b"};sel=null;moves=[];show();};
+
+/* ---------- 初始化 ---------- */
+(async()=>{
+  try{
+    if(window.claude){
+      const u=await claude.use("user");db=await claude.use("db");
+      if(u&&db)uid=await u.id();
+    }
+  }catch(e){db=null;}
+  const net=$("#net");
+  if(db&&uid){
+    $("#bCreate").disabled=false;$("#bJoin").disabled=false;
+    net.textContent="建立房間後，把房號傳給朋友即可對戰。雙方都需要有此頁面的「協作者」以上權限。";
+    const h=(location.hash||"").replace("#","");if(h)join(h);
+  }else net.textContent="目前無法連線（需登入並開啟此頁面的共享資料功能），仍可使用同機雙人。";
+})();
+</script>
+</body>
+</html>
